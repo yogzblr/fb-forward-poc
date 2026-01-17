@@ -28,10 +28,33 @@ Log Files with trace_id & span_id in hex format
 ## Key Components
 
 ### 1. Python Application (`app.py`)
-- Flask web application with OpenTelemetry instrumentation
+- Flask web application with **OpenTelemetry SDK** instrumentation
+- Uses [OpenTelemetry Python SDK](https://opentelemetry.io/docs/languages/python/) for manual instrumentation
 - Generates traces and logs with trace context correlation
 - Sends data via OTLP HTTP to FluentBit #1
-- **Endpoints**:
+
+**OpenTelemetry SDK Components Used**:
+- **`opentelemetry-api`** (v1.22.0) - Core OpenTelemetry API
+- **`opentelemetry-sdk`** (v1.22.0) - OpenTelemetry SDK implementation
+  - `TracerProvider` - Creates and manages tracers
+  - `LoggerProvider` - Creates and manages loggers
+  - `Resource` - Defines service metadata (service.name, version, etc.)
+  - `BatchSpanProcessor` - Batches span exports for efficiency
+  - `BatchLogRecordProcessor` - Batches log exports for efficiency
+- **`opentelemetry-exporter-otlp-proto-http`** (v1.22.0) - OTLP HTTP exporter
+  - `OTLPSpanExporter` - Exports traces via OTLP HTTP
+  - `OTLPLogExporter` - Exports logs via OTLP HTTP
+- **`opentelemetry-instrumentation-flask`** (v0.43b0) - Automatic Flask instrumentation
+  - `FlaskInstrumentor` - Automatically instruments Flask routes
+
+**SDK Configuration**:
+- Manual instrumentation using the OpenTelemetry SDK
+- Automatic instrumentation for Flask framework (routes, HTTP requests)
+- Resource attributes configured: `service.name`, `service.version`, `deployment.environment`
+- OTLP exporters configured via environment variables
+- Python logging integration using `LoggingHandler` for trace context correlation
+
+**Endpoints**:
   - `GET /` - Home endpoint with trace info
   - `GET /api/test` - Test endpoint with child spans
   - `GET /api/test-log` - Test log endpoint (sends log with "Testing for fluentbit POC" message)
@@ -107,10 +130,18 @@ Log Files with trace_id & span_id in hex format
 - **Container**: `fb-poc-app`
 - **Port**: 5000
 - **Image**: Built from `Dockerfile` and `requirements.txt`
+- **OpenTelemetry SDK Version**: 1.22.0
+- **Python Version**: 3.9+ (as per [OpenTelemetry Python requirements](https://opentelemetry.io/docs/languages/python/))
 - **Environment Variables**:
   - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: http://fluentbit-1:4318/v1/traces
   - `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: http://fluentbit-1:4318/v1/logs
   - `OTEL_SERVICE_NAME`: fb-poc-app
+- **Dependencies** (see `requirements.txt`):
+  - `opentelemetry-api==1.22.0` - OpenTelemetry API
+  - `opentelemetry-sdk==1.22.0` - OpenTelemetry SDK
+  - `opentelemetry-exporter-otlp-proto-http==1.22.0` - OTLP HTTP exporter
+  - `opentelemetry-instrumentation-flask==0.43b0` - Flask auto-instrumentation
+  - `Flask==3.0.0` - Web framework
 
 #### FluentBit #1
 - **Container**: `fluentbit-1`
@@ -513,10 +544,48 @@ curl http://localhost:8687/api/v1/metrics
 - `fluentbit-1.yaml` - FluentBit #1 configuration (OTLP input → Forward output)
 - `fluentbit-2.yaml` - FluentBit #2 configuration (Forward input → OTLP output)
 - `vector.yaml` - Vector configuration (OTLP source → VRL transform → File sinks)
-- `app.py` - Python Flask application with OpenTelemetry
-- `requirements.txt` - Python dependencies
+- `app.py` - Python Flask application with **OpenTelemetry SDK** manual instrumentation
+- `requirements.txt` - Python dependencies including OpenTelemetry SDK packages
 - `Dockerfile` - Python app container definition
 - `parsers.conf` - FluentBit parsers (if needed)
+
+### OpenTelemetry SDK Setup in `app.py`
+
+The application uses the OpenTelemetry Python SDK for manual instrumentation:
+
+```python
+# SDK imports
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+
+# Configure Resource (service metadata)
+resource = Resource.create({
+    "service.name": "fb-poc-app",
+    "service.version": "1.0.0",
+    "deployment.environment": "development"
+})
+
+# Configure Tracer Provider
+trace_provider = TracerProvider(resource=resource)
+trace_exporter = OTLPSpanExporter(endpoint="http://fluentbit-1:4318/v1/traces")
+trace_provider.add_span_processor(BatchSpanProcessor(trace_exporter))
+trace.set_tracer_provider(trace_provider)
+
+# Configure Logger Provider
+logger_provider = LoggerProvider(resource=resource)
+log_exporter = OTLPLogExporter(endpoint="http://fluentbit-1:4318/v1/logs")
+logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+set_logger_provider(logger_provider)
+
+# Integrate with Python logging
+handler = LoggingHandler(level=logging.INFO, logger_provider=logger_provider)
+logging.getLogger().addHandler(handler)
+```
+
+This setup follows the [OpenTelemetry Python SDK documentation](https://opentelemetry.io/docs/languages/python/) for manual instrumentation.
 
 ## Troubleshooting
 
@@ -559,6 +628,10 @@ docker logs vector | grep -i "error\|syntax"
 
 ## References
 
+- [OpenTelemetry Python Documentation](https://opentelemetry.io/docs/languages/python/) - Official OpenTelemetry Python SDK docs
+- [OpenTelemetry Python Getting Started](https://opentelemetry.io/docs/languages/python/getting-started/) - Quick start guide
+- [OpenTelemetry Python Instrumentation](https://opentelemetry.io/docs/languages/python/instrumentation/) - Manual instrumentation guide
+- [OpenTelemetry Python Exporters](https://opentelemetry.io/docs/languages/python/exporters/) - Exporter documentation
 - [FluentBit OpenTelemetry Output](https://docs.fluentbit.io/manual/pipeline/outputs/opentelemetry)
 - [Vector OTLP Source](https://vector.dev/docs/reference/configuration/sources/opentelemetry/)
 - [Vector VRL Documentation](https://vrl.dev/)
