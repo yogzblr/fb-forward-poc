@@ -111,6 +111,24 @@ def error_api():
             "span_id": format(span.get_span_context().span_id, '016x')
         }), 500
 
+@app.route('/api/test-log')
+def test_log():
+    """Endpoint to test log sending with specific message"""
+    with tracer.start_as_current_span("test-log-request") as span:
+        span.set_attribute("http.route", "/api/test-log")
+        span.set_attribute("test.type", "log-format")
+        
+        # Send log with specific test message
+        logging.info("Testing for fluentbit POC")
+        
+        return jsonify({
+            "status": "success",
+            "message": "Log sent with message: 'Testing for fluentbit POC'",
+            "trace_id": format(span.get_span_context().trace_id, '032x'),
+            "span_id": format(span.get_span_context().span_id, '016x'),
+            "timestamp": time.time()
+        })
+
 @app.route('/health')
 def health():
     return jsonify({"status": "healthy"}), 200

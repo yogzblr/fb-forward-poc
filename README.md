@@ -34,6 +34,7 @@ Log Files with trace_id & span_id in hex format
 - **Endpoints**:
   - `GET /` - Home endpoint with trace info
   - `GET /api/test` - Test endpoint with child spans
+  - `GET /api/test-log` - Test log endpoint (sends log with "Testing for fluentbit POC" message)
   - `GET /api/error` - Error simulation
   - `GET /health` - Health check
 
@@ -148,6 +149,18 @@ curl http://localhost:5000/api/test
 #   "timestamp": 1768628577.2327895,
 #   "trace_id": "9de960173e2c7e1261317621a0a82da0"
 # }
+
+# Test log endpoint - sends log with "Testing for fluentbit POC" message
+curl http://localhost:5000/api/test-log
+
+# Expected response:
+# {
+#   "message": "Log sent with message: 'Testing for fluentbit POC'",
+#   "span_id": "44f542809452f704",
+#   "status": "success",
+#   "timestamp": 1768630990.4832146,
+#   "trace_id": "0d2051fefbe0a795d7543f46ecdaf321"
+# }
 ```
 
 ### 2. Check FluentBit #1 Metrics
@@ -231,6 +244,69 @@ Here's an actual log entry from Vector showing trace data with trace_id and span
 ```
 
 **Verification**: The API response shows `trace_id: a24a76679b6680adaddd83a2c71f2c3e` and this trace data is successfully flowing through the entire pipeline and being logged by Vector.
+
+### Sample Vector Log Entry (Logs)
+
+Here's a sample log entry showing how application logs are stored in Vector. This example shows a log sent from the Python app with the message "Testing for fluentbit POC":
+
+```json
+{
+  "pipeline": "fluentbit-forward-vector-otlp",
+  "processed_at": "2026-01-17T06:19:45.123456789Z",
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "fb-poc-app"}},
+          {"key": "service.version", "value": {"stringValue": "1.0.0"}},
+          {"key": "deployment.environment", "value": {"stringValue": "development"}},
+          {"key": "telemetry.sdk.language", "value": {"stringValue": "python"}},
+          {"key": "telemetry.sdk.name", "value": {"stringValue": "opentelemetry"}},
+          {"key": "telemetry.sdk.version", "value": {"stringValue": "1.22.0"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "__main__"
+          },
+          "logRecords": [
+            {
+              "body": {"stringValue": "Testing for fluentbit POC"},
+              "severityNumber": "SEVERITY_NUMBER_INFO",
+              "severityText": "INFO",
+              "traceId": "...",  // Binary format (16 bytes), converted to hex in transform
+              "spanId": "...",    // Binary format (8 bytes), converted to hex in transform
+              "timeUnixNano": 1768630985483214000
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "message": "Testing for fluentbit POC",
+  "severity": "INFO",
+  "trace_id": "0d2051fefbe0a795d7543f46ecdaf321",
+  "span_id": "44f542809452f704",
+  "timestamp": "2026-01-17T06:19:45.483214600Z"
+}
+```
+
+**Key Points**:
+- **`message`**: Extracted from `resourceLogs[0].scopeLogs[0].logRecords[0].body.stringValue`
+- **`trace_id`**: Converted from binary `traceId` (16 bytes) to hexadecimal string (32 chars) using `encode_base16!()`
+- **`span_id`**: Converted from binary `spanId` (8 bytes) to hexadecimal string (16 chars) using `encode_base16!()`
+- **`severity`**: Extracted from `severityText` field (e.g., "INFO", "ERROR", "WARN")
+- **`service`**: Available in `resourceLogs[0].resource.attributes` where `key == "service.name"` (service name: "fb-poc-app")
+- The original OTLP batch structure (`resourceLogs`) is preserved for full context, including all resource attributes
+- The transform extracts key fields to top-level for easier querying and filtering
+
+**Testing**: To generate this log format, call the `/api/test-log` endpoint:
+```bash
+curl http://localhost:5000/api/test-log
+```
+
+This will send a log with the message "Testing for fluentbit POC" through the entire pipeline to Vector.
 
 ## Issues Encountered and Solutions
 
