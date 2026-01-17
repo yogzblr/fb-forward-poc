@@ -1,0 +1,29 @@
+service:
+  daemon: off
+  log_level: debug
+  parsers_file: parsers.conf
+  http_server: true
+  http_listen: 0.0.0.0
+  http_port: 2020
+
+pipeline:
+  inputs:
+    - name: opentelemetry
+      listen: 0.0.0.0
+      port: 4318
+      tag_from_uri: true
+      raw_traces: true
+      buffer_chunk_size: 512K
+      buffer_max_size: 4M
+
+  outputs:
+    - name: stdout
+      match: "v1_*"
+      format: json_lines
+    - name: forward
+      match: "v1_*"
+      host: fluentbit-2
+      port: 24224
+      require_ack_response: false
+      compress: gzip
+      retain_metadata_in_forward_mode: true

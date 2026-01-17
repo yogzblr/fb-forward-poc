@@ -1,0 +1,119 @@
+# Vector Configuration
+# Receives data from FluentBit #2 via OTLP and logs to file
+
+# Data directory for Vector
+data_dir: /var/lib/vector
+
+# Sources - receive OTLP data from FluentBit #2
+sources:
+  otlp:
+    type: opentelemetry
+    use_otlp_decoding: true
+    http:
+      address: 0.0.0.0:4318
+    grpc:
+      address: 0.0.0.0:4317
+
+# Transforms - extract trace_id/span_id from OTLP format
+transforms:
+  extract_trace_context:
+    type: remap
+    inputs:
+      - otlp.logs
+      - otlp.traces
+    source: |
+      # Handle OTLP batch structure (resourceLogs format)
+      # Extract trace_id/span_id from first logRecord with valid trace context
+      
+      .pipeline = "fluentbit-forward-vector-otlp"
+      .processed_at = now()
+      
+      # Check if data is in resourceLogs batch format
+      if exists(.resourceLogs) && is_array(.resourceLogs) && length!(.resourceLogs) > 0 {
+        resource_log = .resourceLogs[0]
+        
+        # Extract from first scopeLog's first logRecord with trace_id
+        if exists(resource_log.scopeLogs) && is_array(resource_log.scopeLogs) && length!(resource_log.scopeLogs) > 0 {
+          scope_log = resource_log.scopeLogs[0]
+          if exists(scope_log.logRecords) && is_array(scope_log.logRecords) && length!(scope_log.logRecords) > 0 {
+            log_record = scope_log.logRecords[0]
+            
+            # Extract traceId (binary -> hex)
+            if exists(log_record.traceId) {
+              trace_id_bytes = string!(log_record.traceId)
+              if length!(trace_id_bytes) >= 16 {
+                .trace_id = encode_base16!(trace_id_bytes)
+              }
+            }
+            
+            # Extract spanId (binary -> hex)
+            if exists(log_record.spanId) {
+              span_id_bytes = string!(log_record.spanId)
+              if length!(span_id_bytes) >= 8 {
+                .span_id = encode_base16!(span_id_bytes)
+              }
+            }
+            
+            # Extract message
+            if exists(log_record.body) && is_object(log_record.body) && exists(log_record.body.stringValue) {
+              .message = string!(log_record.body.stringValue)
+            }
+            
+            # Extract severity
+            if exists(log_record.severityText) {
+              .severity = string!(log_record.severityText)
+            }
+          }
+        }
+      } else {
+        # Already decoded format - trace_id/span_id at root level
+        if exists(.trace_id) {
+          .trace_id = string!(.trace_id)
+        }
+        if exists(.span_id) {
+          .span_id = string!(.span_id)
+        }
+        if exists(.message) {
+          .message = string!(.message)
+        } else if exists(.body) {
+          if is_string(.body) {
+            .message = .body
+          } else if is_object(.body) && exists(.body.stringValue) {
+            .message = string!(.body.stringValue)
+          }
+        }
+        if exists(.severity_text) {
+          .severity = string!(.severity_text)
+        } else if exists(.severityText) {
+          .severity = string!(.severityText)
+        }
+      }
+
+# Sinks - output to file
+sinks:
+  # Main output file with all data
+  file_output:
+    type: file
+    inputs:
+      - extract_trace_context
+    path: /var/log/vector/output-%Y-%m-%d.log
+    encoding:
+      codec: json
+    
+  # Separate file for easier debugging
+  traces_file:
+    type: file
+    inputs:
+      - extract_trace_context
+    path: /var/log/vector/traces-%Y-%m-%d.log
+    encoding:
+      codec: json
+    
+  # Console output for real-time monitoring
+  console_output:
+    type: console
+    inputs:
+      - extract_trace_context
+    encoding:
+      codec: json
+    target: stdout

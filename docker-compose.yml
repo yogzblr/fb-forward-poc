@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # Python Application with OpenTelemetry
+  app:
+    build: .
+    container_name: fb-poc-app
+    ports:
+      - "5000:5000"
+    environment:
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://fluentbit-1:4318/v1/traces
+      - OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://fluentbit-1:4318/v1/logs
+      - OTEL_SERVICE_NAME=fb-poc-app
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - fluentbit-1
+    networks:
+      - fb-poc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # FluentBit #1 - Receives OTLP and processes data
+  fluentbit-1:
+    image: fluent/fluent-bit:latest-debug
+    container_name: fluentbit-1
+    ports:
+      - "2020:2020"  # HTTP Server
+      - "4318:4318"  # OTLP HTTP (Traces + Logs)
+    volumes:
+      - ./fluentbit-1.yaml:/fluent-bit/etc/fluent-bit.yaml
+      - ./parsers.conf:/fluent-bit/etc/parsers.conf
+      - ./extract_trace.lua:/fluent-bit/etc/extract_trace.lua
+      - fluentbit-1-tmp:/tmp
+    command: ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.yaml"]
+    depends_on:
+      - fluentbit-2
+    networks:
+      - fb-poc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2020/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # FluentBit #2 - Receives Forward protocol and sends to Vector
+  fluentbit-2:
+    image: fluent/fluent-bit:latest-debug
+    container_name: fluentbit-2
+    ports:
+      - "2021:2021"  # HTTP Server
+      - "24224:24224"  # Forward protocol
+    volumes:
+      - ./fluentbit-2.yaml:/fluent-bit/etc/fluent-bit.yaml
+      - fluentbit-2-tmp:/tmp
+    command: ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.yaml"]
+    depends_on:
+      - vector
+    networks:
+      - fb-poc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2021/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Vector - Receives from FluentBit #2 via OTLP and logs to file
+  vector:
+    image: timberio/vector:latest-alpine
+    container_name: vector
+    ports:
+      - "4318:4318"  # OTLP HTTP input
+      - "8687:8687"  # Vector API
+    volumes:
+      - ./vector.yaml:/etc/vector/vector.yaml:ro
+      - vector-logs:/var/log/vector
+      - vector-data:/var/lib/vector
+    environment:
+      - VECTOR_LOG=debug
+    command: ["--config", "/etc/vector/vector.yaml"]
+    networks:
+      - fb-poc-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8687/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  fb-poc-network:
+    driver: bridge
+
+volumes:
+  vector-logs:
+  vector-data:
+  fluentbit-1-tmp:
+  fluentbit-2-tmp:
